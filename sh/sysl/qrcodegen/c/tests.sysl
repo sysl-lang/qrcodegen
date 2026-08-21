@@ -1,0 +1,233 @@
+module sh.sysl.qrcodegen.c
+@tests
+
+import sysl.slices.{as_ptr, as_mut_ptr}
+
+// What the raw layer claims, checked against the QR Code standard rather than against the header.
+//
+// **These are the survey's probes, kept.** Two questions could not be answered by reading
+// `qrcodegen.h`: whether a `c const` block reads an `enum` constant as readily as the `#define`s every
+// other package here asks for, and whether a `struct` returned by value crosses from C into sysl and
+// back. Both are answered below, and both would otherwise have been scratchpad findings.
+//
+// The constants are asserted against the numbers **ISO/IEC 18004 states**, not against what the header
+// happens to say -- which is the only version of this test worth having. A test reading the constant
+// and comparing it to itself passes whatever the header holds.
+
+// -- The constants cross ---------------------------------------------------------------------------
+
+@test("the error correction levels ascend with protection, as the standard orders them")
+ecc_levels_ascend()
+    assert_eq(ECC_LOW, 0)
+    assert_eq(ECC_MEDIUM, 1)
+    assert_eq(ECC_QUARTILE, 2)
+    assert_eq(ECC_HIGH, 3)
+end ecc_levels_ascend
+
+// **The negative one is the point of this test.** `MASK_AUTO` is -1, so a mask cannot be carried as
+// the `u8` its 0..7 range suggests, and a `c const` that read it as unsigned would wrap to 255 and
+// silently mean "mask 7 with the high bits set" at the call.
+@test("a mask is signed, because asking for automatic selection is -1")
+mask_auto_is_negative()
+    assert_eq(MASK_AUTO, -1)
+    assert_eq(MASK_0, 0)
+    assert_eq(MASK_7, 7)
+end mask_auto_is_negative
+
+// The four-bit mode indicators the standard puts in the bit stream. **They are neither consecutive
+// nor ordered** -- byte is 4 and ECI is 7, between kanji's 8 and alphanumeric's 2 -- which is what
+// makes them a table nobody should be transcribing.
+@test("the mode indicators are the standard's four-bit codes, not an index")
+mode_codes_are_the_standards()
+    assert_eq(MODE_NUMERIC, 1)
+    assert_eq(MODE_ALPHANUMERIC, 2)
+    assert_eq(MODE_BYTE, 4)
+    assert_eq(MODE_ECI, 7)
+    assert_eq(MODE_KANJI, 8)
+end mode_codes_are_the_standards
+
+// -- The one shim ----------------------------------------------------------------------------------
+
+// `qrcodegen_BUFFER_LEN_FOR_VERSION` is `ceil(size^2 / 8) + 1` where `size = version * 4 + 17`. Both
+// ends are checked because both are quoted in the header's own prose: version 1 is 21 modules square,
+// version 40 is 177, and 3918 is the figure that decides whether this library fits on a
+// microcontroller.
+@test("the buffer size for a version is the macro's, and the extremes are the documented ones")
+buffer_len_matches_the_macro()
+    assert_eq(buffer_len(1), 57)
+    assert_eq(buffer_len(40), 3918)
+    assert_eq(buffer_len(40), BUFFER_LEN_MAX)
+
+    assert_eq(VERSION_MIN, 1)
+    assert_eq(VERSION_MAX, 40)
+end buffer_len_matches_the_macro
+
+// The macro's contract requires 1..40 and says nothing about what it computes outside that, so the
+// shim answers 0 rather than a meaningless size. Nothing upstream tests this because nothing upstream
+// has it.
+@test("a version outside the standard's range is refused rather than computed")
+buffer_len_refuses_a_bad_version()
+    assert_eq(buffer_len(0), 0)
+    assert_eq(buffer_len(-1), 0)
+    assert_eq(buffer_len(41), 0)
+end buffer_len_refuses_a_bad_version
+
+// -- A segment crosses by value, in both directions -------------------------------------------------
+
+// **The probe this package was written to run.** `qrcodegen_makeNumeric` returns a 24-byte struct by
+// value -- over AArch64's 16-byte limit, so it comes back through `sret` -- and `encode_segments` then
+// takes an array of them straight back into C. A layout sysl and clang disagreed about would compile,
+// link, and give a wrong answer here rather than a diagnostic anywhere.
+//
+// The assertions are the standard's again: numeric mode packs three digits into ten bits, so four
+// digits is 10 + 4 = 14 bits, and `num_chars` counts characters rather than bytes or bits.
+@test("a segment comes back from C by value with its fields intact")
+segment_crosses_by_value()
+    var buf: []u8 = [0; 16]
+
+    val seg = make_numeric(c"0123", as_mut_ptr(buf))
+
+    assert_eq(seg.mode, MODE_NUMERIC)
+    assert_eq(seg.num_chars, 4)
+    assert_eq(seg.bit_length, 14)
+end segment_crosses_by_value
+
+// And back the other way: the same struct handed to C as an array, which is the half a one-directional
+// probe would have missed.
+@test("a segment built in sysl encodes when handed back to C")
+segment_returns_to_c()
+    var buf: []u8 = [0; 16]
+    var temp: []u8 = [0; 3918]
+    var out: []u8 = [0; 3918]
+
+    val segs = [make_numeric(c"0123", as_mut_ptr(buf))]
+
+    assert(encode_segments(as_ptr(segs), 1, ECC_LOW, as_mut_ptr(temp), as_mut_ptr(out)))
+
+    // Four digits at low correction fit the smallest symbol there is.
+    assert_eq(get_size(as_ptr(out)), 21)
+end segment_returns_to_c
+
+// -- The high-level encoder --------------------------------------------------------------------------
+
+// A `c"…"` literal is a `*u8` into read-only data with no allocation, which is what makes this whole
+// binding reachable from a program that has no heap.
+@test("text encodes, and the symbol reads back at the size the version implies")
+text_encodes()
+    var temp: []u8 = [0; 3918]
+    var out: []u8 = [0; 3918]
+
+    assert(encode_text(c"HELLO WORLD", as_mut_ptr(temp), as_mut_ptr(out),
+                       ECC_MEDIUM, 1, 40, MASK_AUTO, true))
+
+    // Eleven alphanumeric characters at medium correction: version 1, 21 modules square.
+    assert_eq(get_size(as_ptr(out)), 21)
+
+    // Every QR code has a finder pattern in its top-left corner: a 7x7 dark square with a light
+    // ring inside it. That is fixed by the standard, so it is the one part of any symbol whose
+    // modules can be asserted without decoding.
+    assert(get_module(as_ptr(out), 0, 0), "the finder's outer ring is dark")
+    assert(!get_module(as_ptr(out), 1, 1), "and the ring inside it is light")
+    assert(get_module(as_ptr(out), 2, 2), "with a dark 3x3 centre")
+
+    // Out of bounds answers light rather than refusing, which is what lets a caller sweep a quiet
+    // zone without a bounds test of its own.
+    assert(!get_module(as_ptr(out), 21, 21))
+    assert(!get_module(as_ptr(out), -1, -1))
+end text_encodes
+
+// The refusal path: a payload that will not fit the version range answers `false` rather than
+// overrunning. Version 1 at high correction holds ten alphanumeric characters.
+@test("a payload too large for the version range is refused")
+too_large_is_refused()
+    var temp: []u8 = [0; 3918]
+    var out: []u8 = [0; 3918]
+
+    assert(!encode_text(c"HELLO WORLD, THIS IS FAR TOO LONG FOR A VERSION 1 SYMBOL",
+                        as_mut_ptr(temp), as_mut_ptr(out), ECC_HIGH, 1, 1, MASK_AUTO, true))
+end too_large_is_refused
+
+// -- The mode tests, and the segment sizing --------------------------------------------------------
+
+@test("the mode tests agree with the standard's character sets")
+mode_tests_agree()
+    assert(is_numeric(c"0123456789"))
+    assert(!is_numeric(c"12A"))
+
+    assert(is_alphanumeric(c"HELLO WORLD $%*+-./:"))
+    assert(!is_alphanumeric(c"hello"), "the alphanumeric set is upper case only")
+end mode_tests_agree
+
+// **Answers `usize::Max` on failure**, which is a sentinel rather than a status and is the one shape
+// in this header a caller can get wrong silently.
+@test("a segment buffer size is exact, and refuses with a sentinel")
+segment_buffer_size()
+    assert_eq(calc_segment_buffer_size(MODE_NUMERIC, 4), 2)
+    assert_eq(calc_segment_buffer_size(MODE_BYTE, 10), 10)
+    assert_eq(calc_segment_buffer_size(MODE_NUMERIC, 100000), usize::Max)
+end segment_buffer_size
+
+// -- The pointer-and-length door onto `encode_text` -------------------------------------------------
+
+// The shim's split of `scratch` in two, checked at the seam that matters: the same payload through
+// `encode_auto` and through `encode_text` must produce the same symbol, or the copy is landing
+// somewhere the encoder can see.
+@test("a payload encodes the same through the shim as through the terminated call")
+encode_auto_agrees_with_encode_text()
+    val payload = "HELLO WORLD"
+
+    var scratch: []u8 = [0; 4096]
+    var mine: []u8 = [0; 3918]
+
+    assert(encode_auto(as_ptr(payload.bytes), payload.bytes.len,
+                       as_mut_ptr(scratch), scratch.len, as_mut_ptr(mine),
+                       ECC_MEDIUM, 1, 40, MASK_AUTO, true))
+
+    var temp: []u8 = [0; 3918]
+    var theirs: []u8 = [0; 3918]
+
+    assert(encode_text(c"HELLO WORLD", as_mut_ptr(temp), as_mut_ptr(theirs),
+                       ECC_MEDIUM, 1, 40, MASK_AUTO, true))
+
+    val n = get_size(as_ptr(mine))
+
+    assert_eq(n, get_size(as_ptr(theirs)))
+
+    for y in 0..<n
+        for x in 0..<n
+            assert_eq(get_module(as_ptr(mine), x, y), get_module(as_ptr(theirs), x, y))
+end encode_auto_agrees_with_encode_text
+
+// Scratch one byte short of `len + 1 + buffer_len(max_version)` is refused rather than overrun. This
+// is the only bound the shim owns, so it is the only one nothing upstream checks.
+@test("scratch too small for the terminator and the encoder's temporary is refused")
+encode_auto_refuses_short_scratch()
+    val payload = "HELLO WORLD"
+    val needed = payload.bytes.len + 1 + buffer_len(40)
+
+    var out: []u8 = [0; 3918]
+    var scratch: []u8 = [0; 4096]
+
+    assert(encode_auto(as_ptr(payload.bytes), payload.bytes.len,
+                       as_mut_ptr(scratch), needed, as_mut_ptr(out),
+                       ECC_MEDIUM, 1, 40, MASK_AUTO, true), "exactly enough is enough")
+
+    assert(!encode_auto(as_ptr(payload.bytes), payload.bytes.len,
+                        as_mut_ptr(scratch), needed - 1, as_mut_ptr(out),
+                        ECC_MEDIUM, 1, 40, MASK_AUTO, true), "one byte less is not")
+end encode_auto_refuses_short_scratch
+
+// An empty payload is a real QR code, and it is the case where the shim's copy has a null source --
+// which ISO C leaves undefined for `memcpy` even at zero length.
+@test("an empty payload encodes rather than reaching an undefined memcpy")
+encode_auto_takes_an_empty_payload()
+    var scratch: []u8 = [0; 4096]
+    var out: []u8 = [0; 3918]
+
+    val empty: []const u8 = []
+
+    assert(encode_auto(as_ptr(empty), 0, as_mut_ptr(scratch), scratch.len, as_mut_ptr(out),
+                       ECC_LOW, 1, 40, MASK_AUTO, true))
+
+    assert_eq(get_size(as_ptr(out)), 21)
+end encode_auto_takes_an_empty_payload

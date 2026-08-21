@@ -1,0 +1,37 @@
+// QR Code generation, bound to Nayuki's qrcodegen.
+//
+// There is no `dependencies` block because qrcodegen depends on nothing a package manager could
+// fetch -- the implementation includes `<assert.h>`, `<limits.h>`, `<stdlib.h>` and `<string.h>` and
+// that is the whole list. Both files are carried in this package, because qrcodegen is not a library
+// anybody has installed.
+//
+// This is the block a *consumer* writes to reach this package:
+//
+//     dependencies {
+//       qrcodegen { git = "github.com/sysl-lang/qrcodegen", version = "0.1.0" }
+//     }
+//
+// The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
+// tag `v0.1.0` on this repository.
+
+package {
+  name    = "qrcodegen"
+  version = "0.1.0"
+}
+
+// **There is deliberately no `requires` block, and unlike qoi's that took no work at all.**
+//
+// A capability clause is a claim about what a library *does*, and what qrcodegen does is arithmetic
+// on buffers it was handed. It opens no file, reads no clock, and -- the part that matters -- calls
+// no allocator: every entry point takes the storage it will write into. There is no `malloc`,
+// `calloc` or `free` anywhere in the 1027 lines, which is why this package can be built for a
+// freestanding target without redirecting anything.
+//
+// **What it does use from the C library is `memcpy`, `memmove`, `memset`, `strlen` and `abs`**, plus
+// `assert`. A freestanding toolchain supplies the first four whether or not it has a C library --
+// clang emits calls to them from ordinary array code -- and `NDEBUG` compiles the assertions out.
+// `requires {}` is a claim about what this package asks of *sysl*, and that claim is exact.
+//
+// **What is NOT here is a `@link` directive**, and the absence is the point of vendoring: the
+// implementation is compiled from the `.c` carried in this package, so there is no external library
+// for the linker to be given (`15 §8`).

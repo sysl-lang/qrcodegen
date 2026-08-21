@@ -1,0 +1,244 @@
+module sh.sysl.qrcodegen
+
+import sh.sysl.qrcodegen.c
+import sysl.slices.{as_ptr, as_mut_ptr}
+
+// QR codes, bound to Nayuki's `qrcodegen` sitting beside this file.
+//
+// A QR code is a square grid of dark and light *modules* carrying a payload with enough redundancy
+// that a damaged or partly obscured symbol still reads. This package builds one from bytes; drawing
+// it is somebody else's job, and the surface for that is two calls -- how wide is it, and is this
+// module dark.
+//
+// ==This package asks the machine for nothing, and here that took no doing at all==
+//
+// `package.hocon` has no `requires` block. There is no `malloc`, `calloc` or `free` anywhere in
+// qrcodegen's thousand lines: **every entry point is handed the buffers it will write into**, which
+// is the shape the rest of the bindings in this organisation had to work to arrive at. qoi redirects
+// an allocator to get here; this one was already here.
+//
+// So it runs on a microcontroller unchanged, and the number that decides whether it fits is
+// `buffer_len(40)` -- 3918 bytes, for a symbol of any size the standard defines. A payload that will
+// never need a large symbol asks for less: a 60-byte URL at medium correction fits version 4, and
+// `buffer_len(4)` is 166.
+//
+// ==Every call has the same shape==
+//
+// Ask how big the answer can be, hand over slices that size, and get back a view of the one that
+// matters:
+//
+//     var scratch: []u8 = [0; 4096]
+//     var out: []u8 = [0; 4096]
+//
+//     val qr = encode("https://sysl.sh", scratch, out).unwrap()
+//
+//     for y in 0..<qr.size
+//         for x in 0..<qr.size
+//             print(if qr.dark(x, y) then "##" else "  ", end = "")
+//         print("")
+//
+// **`scratch` is working space and holds nothing afterwards.** It is a second buffer rather than a
+// second use of `out` because the encoder needs both at once, and `scratch_len` says how large it has
+// to be -- a little more than `out`, since the payload is copied into the front of it.
+//
+// ==What a caller still owes==
+//
+// **The payload may not contain a zero byte.** The encoder chooses between numeric, alphanumeric and
+// byte mode by looking at the text, and the call underneath takes a NUL-terminated string -- so a
+// zero inside the payload would end it early and silently encode a prefix. `encode` finds it first
+// and answers `InteriorNul` with the offset, rather than letting C truncate (`04 §Passing one to C`
+// is the general form of this hazard).
+//
+// Binary payloads with zero bytes in them are what `encode_binary` is for: it forces byte mode, is
+// told the length, and never looks for a terminator.
+
+// How much of a symbol may be unreadable and still decode.
+//
+// Higher correction costs capacity: the same payload at `High` needs a larger symbol than at `Low`.
+// `Medium` is the usual choice and is what `encode` uses when nothing says otherwise; `Quartile` or
+// `High` earn their space on something that will be printed small, curved, or read in bad light.
+enum Ecc
+    // About 7% of the codewords may be corrupt.
+    Low
+
+    // About 15%.
+    Medium
+
+    // About 25%.
+    Quartile
+
+    // About 30%.
+    High
+
+    // The value qrcodegen uses for this. **Asked for by name rather than written here as 0 to 3** --
+    // the four-arm `match` this replaces would have been correct and would also have been an
+    // agreement with a header that nothing compared it against. qrcodegen's own comment notes that
+    // an internal function depends on these ascending with protection, so the numbering is
+    // interface rather than incidental.
+    code(self) -> int = self match
+        Low      -> c.ECC_LOW
+        Medium   -> c.ECC_MEDIUM
+        Quartile -> c.ECC_QUARTILE
+        High     -> c.ECC_HIGH
+
+// Which of the eight XOR patterns is laid over the symbol before it is drawn.
+//
+// The masking exists to break up runs of same-coloured modules, which is what stops a scanner from
+// mistaking the payload for one of the fixed patterns. **`Auto` is almost always right**: it builds
+// the symbol eight times, scores each against the standard's four penalty rules, and keeps the best.
+// A fixed pattern is for reproducing a specific symbol, and is the only reason to spell one.
+enum Mask
+    // Try all eight and keep the one that scores best.
+    Auto
+
+    // Force pattern `n`, which is 0 to 7. Anything else is refused as `BadMask` rather than
+    // silently taken modulo eight.
+    Pattern(n: int)
+
+    code(self) -> int = self match
+        Auto       -> c.MASK_AUTO
+        Pattern(n) -> n
+
+// Why a symbol was not built.
+enum Error
+    // A slice was too small. `needed` is how many bytes would have been enough -- the figure
+    // qrcodegen's own macro computes for `max_version`, so a caller that guessed low can resize once
+    // rather than doubling until it fits.
+    Short(needed: usize)
+
+    // The payload does not fit any version in the range at that correction level. The remedy is a
+    // larger `max_version`, a lower `Ecc`, or less payload; the encoder has already chosen the
+    // smallest symbol that would work, so there is nothing else to try.
+    TooLong
+
+    // The payload holds a zero byte at this offset, and mode selection cannot see past it. Use
+    // `encode_binary`, which is told the length.
+    InteriorNul(at: usize)
+
+    // `min_version` or `max_version` is outside the standard's 1 to 40, or `min` is above `max`.
+    BadVersion
+
+    // A `Pattern` outside 0 to 7.
+    BadMask
+end Error
+
+// A finished symbol: a view of the slice `encode` wrote into, and the two questions worth asking of
+// it.
+//
+// **It borrows rather than owns.** The bytes are the caller's `out`, so a `Qr` is valid for as long
+// as that slice is and copies nothing. Reading a module is a call into C, which is cheap and is also
+// why the packed representation is not exposed -- how a symbol is stored is qrcodegen's business and
+// changing it would be its business too.
+struct Qr
+    private bytes: []const u8
+
+    // The side length in modules: 21 for a version 1 symbol, 177 for a version 40, and always odd.
+    size(self) -> int = c.get_size(as_ptr(self.bytes))
+
+    // Whether the module at `(x, y)` is dark, with `(0, 0)` at the top left.
+    //
+    // **Out of bounds is light rather than an error**, which is qrcodegen's own behaviour and is what
+    // lets a renderer sweep a quiet zone -- the four-module light margin the standard requires around
+    // a symbol -- without a bounds test of its own.
+    dark(self, x: int, y: int) -> bool = c.get_module(as_ptr(self.bytes), x, y)
+
+    // Which version the encoder settled on: 1 to 40. Derived from the side length, since that is what
+    // defines it.
+    version(self) -> int = (self.size() - 17) / 4
+end Qr
+
+// How many bytes a symbol of this version needs, and therefore how large `out` must be. 0 for a
+// version outside 1 to 40.
+//
+// This is qrcodegen's own macro rather than the arithmetic restated here, so it cannot drift from
+// what the encoder will actually ask for. Version 1 is 57 bytes and version 40 is 3918.
+buffer_len(version: int) -> usize = c.buffer_len(version)
+
+// How large `scratch` must be to encode `payload` bytes into a symbol of at most `max_version`.
+//
+// A little more than `buffer_len(max_version)`: the encoder wants a temporary buffer that size, and
+// the payload plus its terminator goes in front of it.
+scratch_len(payload: usize, max_version: int) -> usize =
+    if buffer_len(max_version) == 0 then 0 else payload + 1 + buffer_len(max_version)
+
+// Encode `text` into `out`, choosing the densest mode it fits.
+//
+// The payload is the string's bytes, so this allocates nothing and a literal costs nothing: a
+// `string` is already a length and a pointer at UTF-8 (`04 §Layout`), which is what the encoder
+// wants. **A zero byte inside the string is refused** as `InteriorNul` -- see `encode_binary`.
+//
+//     val qr = encode("https://sysl.sh", scratch, out).unwrap()
+//     val qr = encode("SYSL", scratch, out, ecl = High).unwrap()
+encode(text: string, scratch: []u8, out: []u8, ecl: Ecc = Medium,
+       min_version: int = 1, max_version: int = 40,
+       mask: Mask = Auto, boost_ecl: bool = true) -> Result[Qr, Error] =
+    encode_bytes(text.bytes, scratch, out, ecl, min_version, max_version, mask, boost_ecl)
+
+// The same for bytes that are not held as a `string`.
+//
+// **Mode selection still reads them as text**, so this is the call for a payload you happen to be
+// holding as a slice rather than one that is not text at all -- that is `encode_binary`.
+encode_bytes(data: []const u8, scratch: []u8, out: []u8, ecl: Ecc = Medium,
+             min_version: int = 1, max_version: int = 40,
+             mask: Mask = Auto, boost_ecl: bool = true) -> Result[Qr, Error]
+    if check(min_version, max_version, mask, data.len, scratch, out) is Some(e) then return Err(e)
+
+    // Mode selection stops at a terminator, so a zero byte in the payload would encode a prefix and
+    // report success. Finding it here is the difference between a refusal and a QR code that quietly
+    // carries less than it was given.
+    for i in 0..<data.len
+        if data[i] == 0 then return Err(InteriorNul(i))
+
+    if c.encode_auto(as_ptr(data), data.len, as_mut_ptr(scratch), scratch.len, as_mut_ptr(out),
+                     ecl.code(), min_version, max_version, mask.code(), boost_ecl) then
+        Ok(Qr(out))
+    else
+        Err(TooLong)
+end encode_bytes
+
+// Encode `data` as bytes, whatever they are.
+//
+// **Byte mode, always** -- no mode selection, so a zero byte is ordinary payload and a numeric string
+// takes three times the space it would through `encode`. This is the call for a payload that is not
+// text: a compressed record, a key, a CBOR document.
+//
+// `scratch` holds the data on entry and is destroyed by the call, which is qrcodegen's own shape
+// rather than this binding's: the encoder reuses the input buffer as its working space, so the
+// caller's `data` is copied in rather than passed through.
+encode_binary(data: []const u8, scratch: []u8, out: []u8, ecl: Ecc = Medium,
+              min_version: int = 1, max_version: int = 40,
+              mask: Mask = Auto, boost_ecl: bool = true) -> Result[Qr, Error]
+    if check(min_version, max_version, mask, data.len, scratch, out) is Some(e) then return Err(e)
+
+    for i in 0..<data.len
+        scratch[i] = data[i]
+
+    if c.encode_binary(as_mut_ptr(scratch), data.len, as_mut_ptr(out),
+                       ecl.code(), min_version, max_version, mask.code(), boost_ecl) then
+        Ok(Qr(out))
+    else
+        Err(TooLong)
+end encode_binary
+
+// The bounds every encode shares, checked before any of them reaches C. `None` is the good answer.
+//
+// **qrcodegen is handed pointers and never a length**, so nothing below this line would notice a
+// slice too small -- it would write past the end of one and the failure would surface somewhere else
+// entirely. The `Short` this answers carries the figure the encoder itself computes.
+private check(min_version: int, max_version: int, mask: Mask, payload: usize,
+              scratch: []u8, out: []u8) -> Option[Error]
+    if min_version < c.VERSION_MIN || max_version > c.VERSION_MAX || min_version > max_version then
+        return Some(BadVersion)
+
+    if mask is Pattern(n) && (n < 0 || n > 7) then return Some(BadMask)
+
+    val room = buffer_len(max_version)
+
+    if out.len < room then return Some(Short(room))
+
+    val working = scratch_len(payload, max_version)
+
+    if scratch.len < working then return Some(Short(working))
+
+    None
+end check

@@ -1,0 +1,185 @@
+// qrcodegen as C declares it: fourteen entry points, one shim, and the numbers its two headers hold.
+//
+// **Everything that is C lives in this directory** — `qrcodegen.c` and `qrcodegen.h` as they come from
+// upstream, the `shim.c` that answers for the one thing sysl cannot reach, the `shim.h` that says what
+// that answer is, and this file of declarations over them. Nothing here is meant to be called by a
+// program: an error correction level is a bare `int`, a failure is a `false` with no reason attached,
+// and a buffer is a pointer whose length the caller is trusted to have got right. The module above this
+// one turns those into an `enum`, a `Result` and a slice, and is what an application imports.
+//
+// The split keeps two jobs apart. This one has to be **faithful** — a signature that disagrees with the
+// header links perfectly and corrupts the call at run time, and nothing in this arrangement checks one
+// against the other, so each declaration below was read out of `qrcodegen.h` rather than remembered.
+// The other one has to be **pleasant**, which is a different question and would otherwise be answered
+// in the same breath.
+//
+// **This is the thinnest raw layer in the organisation that has a shim at all, and the reason is that
+// qrcodegen never allocates.** Every entry point is handed the buffers it will write into, so the
+// ownership question that shapes most bindings here — qoi's arena, regex's `free` method — does not
+// arise, and thirteen of the fourteen functions below are the upstream symbol named directly.
+
+module sh.sysl.qrcodegen.c
+
+// Two headers, because the numbers below come from two places: qrcodegen's own, and the shim's one
+// declaration. Both sit in this directory, so neither needs an include path.
+//
+// **qrcodegen has no compile-time options at all** — no `#ifdef` in the implementation but the one
+// guarding its white-box test hooks, and nothing that changes a type, a layout or a constant. So there
+// is nothing a reader of this header could be configured differently from, which is the trap
+// termbox2's `TB_OPT_ATTR_W` is: an option that reaches a constant has to be written somewhere both
+// readers include, and here there is no such option to write.
+@include("qrcodegen.h")
+@include("shim.h")
+
+// ## The three enumerations, asked for rather than written down
+//
+// **These are `enum` constants rather than `#define`s, which is the one thing about this header that
+// had to be probed rather than assumed.** A `c const` block is a probe translation unit of the
+// compiler's own making (`15 §7`) and it evaluates a constant *expression*; an enumerator is one, so
+// they cross exactly as a macro would. Every other package here reads `#define`s, so this is the first
+// evidence in the organisation that the other spelling works.
+//
+// Asking is worth it for the same reason it was in qoi: transcribed, `qrcodegen_Ecc_QUARTILE` is a `2`
+// correct on the day it was read and checked by nothing afterwards.
+
+// How much of a QR code may be unreadable and still decode. The values ascend with protection, which
+// qrcodegen's own comment says an internal function depends on — so the order is interface, not
+// incidental.
+c const
+    ECC_LOW:      int = "qrcodegen_Ecc_LOW"
+    ECC_MEDIUM:   int = "qrcodegen_Ecc_MEDIUM"
+    ECC_QUARTILE: int = "qrcodegen_Ecc_QUARTILE"
+    ECC_HIGH:     int = "qrcodegen_Ecc_HIGH"
+
+// Which of the eight XOR patterns is laid over the symbol, or `MASK_AUTO` to let the encoder try all
+// eight and keep the one that scores best. **`MASK_AUTO` is `-1`**, which is why every mask crosses as
+// a signed `int` rather than the `u8` its range would otherwise suggest.
+c const
+    MASK_AUTO: int = "qrcodegen_Mask_AUTO"
+    MASK_0:    int = "qrcodegen_Mask_0"
+    MASK_1:    int = "qrcodegen_Mask_1"
+    MASK_2:    int = "qrcodegen_Mask_2"
+    MASK_3:    int = "qrcodegen_Mask_3"
+    MASK_4:    int = "qrcodegen_Mask_4"
+    MASK_5:    int = "qrcodegen_Mask_5"
+    MASK_6:    int = "qrcodegen_Mask_6"
+    MASK_7:    int = "qrcodegen_Mask_7"
+
+// How a segment's bits are read back. **These are not consecutive and not in order** — `BYTE` is 4 and
+// `ECI` is 7 — because they are the four-bit mode indicators the QR standard puts in the stream rather
+// than an index. That is precisely the kind of table nobody should be transcribing.
+c const
+    MODE_NUMERIC:      int = "qrcodegen_Mode_NUMERIC"
+    MODE_ALPHANUMERIC: int = "qrcodegen_Mode_ALPHANUMERIC"
+    MODE_BYTE:         int = "qrcodegen_Mode_BYTE"
+    MODE_KANJI:        int = "qrcodegen_Mode_KANJI"
+    MODE_ECI:          int = "qrcodegen_Mode_ECI"
+
+// ## The sizes
+//
+// A version is a QR code's size: version 1 is 21 modules square and each one after adds four, up to
+// version 40 at 177. `BUFFER_LEN_MAX` is what a buffer big enough for any of them must be — 3918
+// bytes, just under four kilobytes, which is the figure that decides whether this library fits on a
+// microcontroller.
+c const
+    VERSION_MIN:    int   = "qrcodegen_VERSION_MIN"
+    VERSION_MAX:    int   = "qrcodegen_VERSION_MAX"
+    BUFFER_LEN_MAX: usize = "qrcodegen_BUFFER_LEN_MAX"
+
+// **`qrcodegen_BUFFER_LEN_FOR_VERSION(n)` is a function-like macro and therefore has no symbol**,
+// which is `15 §7`'s second C-only shape and the only reason this package has a shim. A caller that
+// knows its payload is small wants a buffer sized for version 4 rather than for 40, so the macro is
+// interface rather than internals and restating its arithmetic in sysl would be an agreement in two
+// places. Answers 0 for a version outside 1..40, which the macro itself does not define.
+extern "sysl_qrcodegen_buffer_len" buffer_len(version: int) -> usize
+
+// **`encode_text` below is reachable only from a caller holding a NUL-terminated string, and this is
+// the same call taking a pointer and a length.** A sysl `string` carries a length and has no
+// terminator (`04 §Passing one to C`), so converting one allocates — and an allocation here would
+// cost this package the property that makes it interesting. The shim splits `scratch` in two and puts
+// the terminated copy in front of the temporary buffer `encode_text` wants, so the caller supplies
+// `len + 1 + buffer_len(max_version)` bytes and nothing reaches a heap.
+//
+// The second reason to go through `encode_text` at all is that it is the only entry point that
+// *chooses* the mode: digits at ten bits per three, upper case at eleven per two, everything else a
+// byte each. Skipping it costs a numeric payload three times the space.
+extern "sysl_qrcodegen_encode_auto" encode_auto(data: *u8, len: usize,
+                                                scratch: *u8, scratch_len: usize, qrcode: *u8,
+                                                ecl: int, min_version: int, max_version: int,
+                                                mask: int, boost_ecl: bool) -> bool
+
+// ## A segment, which crosses by value
+//
+// **This is the first struct in the organisation returned by value from C into sysl in a shipped
+// package**, and it is here because `15 §7` never listed by-value among its C-only shapes and a probe
+// against 0.0.45 confirmed both directions. The layout is `qrcodegen.h`'s, field for field: a 4-byte
+// mode, a 4-byte count, an 8-byte pointer that forces the alignment, and a 4-byte length, so 24 bytes
+// with four of tail padding. On AArch64 that is over the 16-byte limit and comes back through `sret`.
+//
+// `data` points into a buffer the *caller* supplied to the factory below — the segment owns nothing
+// and outlives nothing. That is the whole reason a struct with a raw pointer in it is safe to hand
+// around here.
+struct Segment
+    mode: int
+    num_chars: int
+    data: *u8
+    bit_length: int
+
+// ## The entry points
+//
+// Read in the header's own order: the two high-level encoders, the two low-level ones, the tests and
+// the factories that feed them, and the two accessors that read a finished symbol.
+
+// **`temp` and `qrcode` must each be at least `buffer_len(max_version)` bytes and must not overlap.**
+// Both are scratch on entry and `temp` is scratch on exit; only `qrcode` means anything afterwards, and
+// only if the call answered `true`. A `false` means the text did not fit in `max_version` at `ecl`.
+extern "qrcodegen_encodeText" encode_text(text: *u8, temp: *u8, qrcode: *u8, ecl: int,
+                                          min_version: int, max_version: int,
+                                          mask: int, boost_ecl: bool) -> bool
+
+// The same, for bytes rather than text — and note that the input buffer **is** the scratch buffer:
+// `data_and_temp` holds `data_len` bytes on entry and is destroyed by the call. It too must be
+// `buffer_len(max_version)` bytes long, not `data_len`.
+extern "qrcodegen_encodeBinary" encode_binary(data_and_temp: *u8, data_len: usize, qrcode: *u8,
+                                              ecl: int, min_version: int, max_version: int,
+                                              mask: int, boost_ecl: bool) -> bool
+
+// Encodes a prepared list of segments, choosing the smallest version that fits and raising `ecl` where
+// that is free. `temp` and `qrcode` are sized for `VERSION_MAX` here, since no maximum is given.
+extern "qrcodegen_encodeSegments" encode_segments(segs: *Segment, len: usize, ecl: int,
+                                                  temp: *u8, qrcode: *u8) -> bool
+
+// The same with the version range, mask and boost exposed. **A segment's `data` may point into `temp`**
+// — qrcodegen documents the aliasing as permitted — which is what lets a caller build segments in the
+// same buffer the encoder is about to reuse.
+extern "qrcodegen_encodeSegmentsAdvanced" encode_segments_advanced(segs: *Segment, len: usize, ecl: int,
+                                                                   min_version: int, max_version: int,
+                                                                   mask: int, boost_ecl: bool,
+                                                                   temp: *u8, qrcode: *u8) -> bool
+
+// Whether a string can go in the denser modes. Numeric is the digits; alphanumeric is the digits,
+// upper case, space and eight punctuation marks.
+extern "qrcodegen_isNumeric" is_numeric(text: *u8) -> bool
+extern "qrcodegen_isAlphanumeric" is_alphanumeric(text: *u8) -> bool
+
+// How large a segment's own bit buffer must be. **Answers `usize::Max` on failure** rather than a
+// status, which is one of the two refusals in this header that are a sentinel value.
+extern "qrcodegen_calcSegmentBufferSize" calc_segment_buffer_size(mode: int, num_chars: usize) -> usize
+
+// The four factories. Each writes the encoded bits into `buf` — which the caller sizes with
+// `calc_segment_buffer_size` — and answers a `Segment` pointing at it.
+extern "qrcodegen_makeBytes" make_bytes(data: *u8, len: usize, buf: *u8) -> Segment
+extern "qrcodegen_makeNumeric" make_numeric(digits: *u8, buf: *u8) -> Segment
+extern "qrcodegen_makeAlphanumeric" make_alphanumeric(text: *u8, buf: *u8) -> Segment
+
+// **`assignVal` is a C `long`, and `long` is the sysl alias whose width matches it on LP64** (`01`
+// §Integers) — which is every target sysl builds for. It is the one declaration here that rests on the
+// ABI rather than on a fixed-width name, and it is upstream's choice of type rather than this
+// binding's.
+extern "qrcodegen_makeEci" make_eci(assign_val: long, buf: *u8) -> Segment
+
+// Reading a finished symbol. The side length is 21..177; a module is `true` for dark. **`get_module`
+// answers `false` for coordinates outside the symbol** rather than refusing, so it is safe to sweep a
+// larger area than the code occupies — which is what drawing one with a quiet zone does.
+extern "qrcodegen_getSize" get_size(qrcode: *u8) -> int
+extern "qrcodegen_getModule" get_module(qrcode: *u8, x: int, y: int) -> bool
