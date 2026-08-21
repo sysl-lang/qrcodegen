@@ -8,7 +8,8 @@ encoding modes, and the mask selection.
 **This package asks the machine for nothing.** There is no `requires` block — no allocator, no
 operating system, no file system. Unlike every other binding in this organisation that can say that,
 it took no doing at all: qrcodegen never allocates, because every entry point is handed the buffers
-it will write into. That is what makes it the easiest thing here to put on a microcontroller.
+it will write into. What it needs of a C toolchain is four headers and five functions from them; see
+[What is still hosted about it](#what-is-still-hosted-about-it) before pointing this at bare metal.
 
 ```
 sh/sysl/qrcodegen/
@@ -220,6 +221,33 @@ than readings:
 The four standing questions the survey asks came out: **nobody owns the memory** (there is no
 `malloc` in the library at all); **struct-by-value is used and works**; **there are no compile-time
 options**, so no ABI to get wrong; and the capability it needs is **none**.
+
+## What is still hosted about it
+
+**`requires {}` is a claim about what this package asks of *sysl* — no allocator, no operating
+system — and that claim is exact.** Whether the C it vendors compiles is a separate question, and on
+a bare-metal target today the answer is no:
+
+```
+sysl build-lib . --target thumb-freestanding
+qrcodegen.c:24:10: fatal error: 'assert.h' file not found
+```
+
+`qrcodegen.c` includes `<assert.h>`, `<limits.h>`, `<stdlib.h>` and `<string.h>`. Clang supplies
+`limits.h` to a freestanding target and the other three it does not, so a target with no C library at
+all cannot build this as it stands. What is actually *used* from them is small — `assert`, `abs`,
+`memcpy`, `memmove`, `memset` and `strlen` — and nothing in that list allocates or touches the
+operating system, which is why the capability claim above stands unaffected.
+
+**A target with a C library is fine, which includes the ones this is interesting on.** The Pico SDK
+carries newlib, so a Pico 2 W build gets all four headers; so does any Zephyr or FreeRTOS
+application. It is the truly bare `*-freestanding` targets that would need the four headers supplied,
+and supplying them is the consumer's decision rather than this package's — shadowing `string.h` for a
+whole build is not something a dependency should do quietly. qoi says the same thing about its own
+two headers, and for the same reason.
+
+Verified: `aarch64-macos` and `x86_64-macos` build and the suite is green; `thumb-freestanding` fails
+as above.
 
 ## Testing
 

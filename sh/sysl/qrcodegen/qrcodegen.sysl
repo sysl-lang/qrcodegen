@@ -17,10 +17,15 @@ import sysl.slices.{as_ptr, as_mut_ptr}
 // is the shape the rest of the bindings in this organisation had to work to arrive at. qoi redirects
 // an allocator to get here; this one was already here.
 //
-// So it runs on a microcontroller unchanged, and the number that decides whether it fits is
-// `buffer_len(40)` -- 3918 bytes, for a symbol of any size the standard defines. A payload that will
-// never need a large symbol asks for less: a 60-byte URL at medium correction fits version 4, and
-// `buffer_len(4)` is 166.
+// So the number that decides whether it fits a small machine is `buffer_len(40)` -- 3918 bytes, for
+// a symbol of any size the standard defines. A payload that will never need a large symbol asks for
+// far less: a sixty-character URL at medium correction fits version 4, and `buffer_len(4)` is 138.
+//
+// **What that claim does not cover is the C toolchain.** `qrcodegen.c` includes `<assert.h>`,
+// `<stdlib.h>` and `<string.h>`, and a target with no C library has none of them -- so a
+// `*-freestanding` build fails on the include rather than on anything this package does. A target
+// with a libc is fine, and that includes the ones this is interesting on: the Pico SDK carries
+// newlib. The README says which of the two you are on.
 //
 // ==Every call has the same shape==
 //

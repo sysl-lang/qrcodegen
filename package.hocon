@@ -24,13 +24,18 @@ package {
 // A capability clause is a claim about what a library *does*, and what qrcodegen does is arithmetic
 // on buffers it was handed. It opens no file, reads no clock, and -- the part that matters -- calls
 // no allocator: every entry point takes the storage it will write into. There is no `malloc`,
-// `calloc` or `free` anywhere in the 1027 lines, which is why this package can be built for a
-// freestanding target without redirecting anything.
+// `calloc` or `free` anywhere in the 1027 lines, so there is no arena to build and no allocator to
+// redirect, which is the work qoi had to do to make the same claim.
 //
-// **What it does use from the C library is `memcpy`, `memmove`, `memset`, `strlen` and `abs`**, plus
-// `assert`. A freestanding toolchain supplies the first four whether or not it has a C library --
-// clang emits calls to them from ordinary array code -- and `NDEBUG` compiles the assertions out.
-// `requires {}` is a claim about what this package asks of *sysl*, and that claim is exact.
+// **What it does use from the C library is `assert`, `abs`, `memcpy`, `memmove`, `memset` and
+// `strlen`.** None of those allocates or asks the operating system for anything, so `requires {}` --
+// a claim about what this package asks of *sysl* -- is exact.
+//
+// **Whether the headers declaring them exist is the C toolchain's business, and on a bare target
+// they do not.** `qrcodegen.c` includes `<assert.h>`, `<limits.h>`, `<stdlib.h>` and `<string.h>`;
+// clang gives a freestanding target the second and not the other three, so `--target
+// thumb-freestanding` fails on the include. A target with a libc is fine, which includes the Pico
+// SDK's newlib. The README's "What is still hosted about it" says how to read that.
 //
 // **What is NOT here is a `@link` directive**, and the absence is the point of vendoring: the
 // implementation is compiled from the `.c` carried in this package, so there is no external library
