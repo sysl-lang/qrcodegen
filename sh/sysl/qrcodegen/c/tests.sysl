@@ -83,7 +83,7 @@ end buffer_len_refuses_a_bad_version
 // digits is 10 + 4 = 14 bits, and `num_chars` counts characters rather than bytes or bits.
 @test("a segment comes back from C by value with its fields intact")
 segment_crosses_by_value()
-    var buf: []u8 = [0; 16]
+    val buf: []u8 = [0; 16]
 
     val seg = make_numeric(c"0123", as_mut_ptr(buf))
 
@@ -96,9 +96,9 @@ end segment_crosses_by_value
 // probe would have missed.
 @test("a segment built in sysl encodes when handed back to C")
 segment_returns_to_c()
-    var buf: []u8 = [0; 16]
-    var temp: []u8 = [0; 3918]
-    var out: []u8 = [0; 3918]
+    val buf: []u8 = [0; 16]
+    val temp: []u8 = [0; 3918]
+    val out: []u8 = [0; 3918]
 
     val segs = [make_numeric(c"0123", as_mut_ptr(buf))]
 
@@ -114,8 +114,8 @@ end segment_returns_to_c
 // binding reachable from a program that has no heap.
 @test("text encodes, and the symbol reads back at the size the version implies")
 text_encodes()
-    var temp: []u8 = [0; 3918]
-    var out: []u8 = [0; 3918]
+    val temp: []u8 = [0; 3918]
+    val out: []u8 = [0; 3918]
 
     assert(encode_text(c"HELLO WORLD", as_mut_ptr(temp), as_mut_ptr(out),
                        ECC_MEDIUM, 1, 40, MASK_AUTO, true))
@@ -140,8 +140,8 @@ end text_encodes
 // overrunning. Version 1 at high correction holds ten alphanumeric characters.
 @test("a payload too large for the version range is refused")
 too_large_is_refused()
-    var temp: []u8 = [0; 3918]
-    var out: []u8 = [0; 3918]
+    val temp: []u8 = [0; 3918]
+    val out: []u8 = [0; 3918]
 
     assert(!encode_text(c"HELLO WORLD, THIS IS FAR TOO LONG FOR A VERSION 1 SYMBOL",
                         as_mut_ptr(temp), as_mut_ptr(out), ECC_HIGH, 1, 1, MASK_AUTO, true))
@@ -176,15 +176,15 @@ end segment_buffer_size
 encode_auto_agrees_with_encode_text()
     val payload = "HELLO WORLD"
 
-    var scratch: []u8 = [0; 4096]
-    var mine: []u8 = [0; 3918]
+    val scratch: []u8 = [0; 4096]
+    val mine: []u8 = [0; 3918]
 
     assert(encode_auto(as_ptr(payload.bytes), payload.bytes.len,
                        as_mut_ptr(scratch), scratch.len, as_mut_ptr(mine),
                        ECC_MEDIUM, 1, 40, MASK_AUTO, true))
 
-    var temp: []u8 = [0; 3918]
-    var theirs: []u8 = [0; 3918]
+    val temp: []u8 = [0; 3918]
+    val theirs: []u8 = [0; 3918]
 
     assert(encode_text(c"HELLO WORLD", as_mut_ptr(temp), as_mut_ptr(theirs),
                        ECC_MEDIUM, 1, 40, MASK_AUTO, true))
@@ -205,8 +205,8 @@ encode_auto_refuses_short_scratch()
     val payload = "HELLO WORLD"
     val needed = payload.bytes.len + 1 + buffer_len(40)
 
-    var out: []u8 = [0; 3918]
-    var scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 3918]
+    val scratch: []u8 = [0; 4096]
 
     assert(encode_auto(as_ptr(payload.bytes), payload.bytes.len,
                        as_mut_ptr(scratch), needed, as_mut_ptr(out),
@@ -221,8 +221,8 @@ end encode_auto_refuses_short_scratch
 // which ISO C leaves undefined for `memcpy` even at zero length.
 @test("an empty payload encodes rather than reaching an undefined memcpy")
 encode_auto_takes_an_empty_payload()
-    var scratch: []u8 = [0; 4096]
-    var out: []u8 = [0; 3918]
+    val scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 3918]
 
     val empty: []const u8 = []
 

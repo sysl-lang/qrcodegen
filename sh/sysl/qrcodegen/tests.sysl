@@ -119,8 +119,8 @@ end assert_grid
 
 @test("an alphanumeric payload matches two other encoders' symbol, module for module")
 alphanumeric_matches_segno()
-    var scratch: []u8 = [0; 4096]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 4096]
 
     // `boost_ecl` off, because raising the level for free would change the symbol and the reference
     // was made without it.
@@ -133,8 +133,8 @@ end alphanumeric_matches_segno
 
 @test("a numeric payload matches two other encoders' symbol, module for module")
 numeric_matches_segno()
-    var scratch: []u8 = [0; 4096]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 4096]
 
     val qr = encode("012345678901234", scratch, out, ecl = Quartile,
                     min_version = 1, max_version = 1,
@@ -153,14 +153,14 @@ end numeric_matches_segno
 numeric_is_denser_than_bytes()
     val digits = "0123456789012345678901234567890123456789"
 
-    var scratch: []u8 = [0; 4096]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 4096]
 
     val chosen = encode(digits, scratch, out).expect("forty digits encode")
     val chosen_version = chosen.version()
 
-    var scratch2: []u8 = [0; 4096]
-    var out2: []u8 = [0; 4096]
+    val scratch2: []u8 = [0; 4096]
+    val out2: []u8 = [0; 4096]
 
     val forced = encode_binary(digits.bytes, scratch2, out2).expect("and so do forty bytes")
 
@@ -171,16 +171,16 @@ end numeric_is_denser_than_bytes
 // The encoder chooses the smallest symbol that fits, so a longer payload is never a smaller symbol.
 @test("the version rises with the payload, and reads back from the size")
 version_follows_the_payload()
-    var scratch: []u8 = [0; 8192]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 8192]
+    val out: []u8 = [0; 4096]
 
     val small = encode("SYSL", scratch, out).expect("four characters encode")
 
     assert_eq(small.version(), 1)
     assert_eq(small.size(), 21)
 
-    var scratch2: []u8 = [0; 8192]
-    var out2: []u8 = [0; 4096]
+    val scratch2: []u8 = [0; 8192]
+    val out2: []u8 = [0; 4096]
 
     val big = encode("SYSL IS A SYSTEMS LANGUAGE WITH ONE LLVM BACKEND AND NO RUNTIME TO SPEAK OF",
                      scratch2, out2).expect("seventy-five characters encode too")
@@ -200,13 +200,13 @@ end version_follows_the_payload
 zero_bytes_are_binary_payload()
     val data: []const u8 = [0x00, 0xFF, 0x00, 0x10, 0x00]
 
-    var scratch: []u8 = [0; 4096]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 4096]
 
     assert(encode_binary(data, scratch, out).is_ok(), "binary carries the zeroes")
 
-    var scratch2: []u8 = [0; 4096]
-    var out2: []u8 = [0; 4096]
+    val scratch2: []u8 = [0; 4096]
+    val out2: []u8 = [0; 4096]
 
     // The offset matters: told only that something was wrong, a caller cannot tell a zero byte from
     // a payload that was too long.
@@ -222,8 +222,8 @@ end zero_bytes_are_binary_payload
 // shim's copy has a null source, which ISO C leaves undefined for `memcpy` even at zero length.
 @test("an empty payload is the smallest symbol rather than an error")
 empty_payload_encodes()
-    var scratch: []u8 = [0; 4096]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 4096]
 
     val qr = encode("", scratch, out).expect("nothing is a payload")
 
@@ -231,8 +231,8 @@ empty_payload_encodes()
 
     val nothing: []const u8 = []
 
-    var scratch2: []u8 = [0; 4096]
-    var out2: []u8 = [0; 4096]
+    val scratch2: []u8 = [0; 4096]
+    val out2: []u8 = [0; 4096]
 
     assert(encode_binary(nothing, scratch2, out2).is_ok())
 end empty_payload_encodes
@@ -248,8 +248,8 @@ out_is_bounded_exactly()
 
     assert_eq(room, 138)
 
-    var scratch: []u8 = [0; 4096]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 4096]
 
     assert(encode("SYSL", scratch, out[0..<room], max_version = 4).is_ok(),
            "exactly buffer_len(4) is enough")
@@ -266,8 +266,8 @@ scratch_is_bounded_exactly()
     // The payload, its terminator, and the encoder's own temporary buffer.
     assert_eq(working, payload.bytes.len + 1 + buffer_len(4))
 
-    var scratch: []u8 = [0; 4096]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 4096]
 
     assert(encode(payload, scratch[0..<working], out, max_version = 4).is_ok(),
            "exactly scratch_len is enough")
@@ -280,8 +280,8 @@ end scratch_is_bounded_exactly
 
 @test("a payload too large for the version range is refused rather than truncated")
 too_long_is_refused()
-    var scratch: []u8 = [0; 8192]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 8192]
+    val out: []u8 = [0; 4096]
 
     // Version 1 at high correction holds ten alphanumeric characters.
     assert(is_too_long(encode("HELLO WORLD, WHICH IS FAR MORE THAN A VERSION 1 SYMBOL HOLDS",
@@ -295,8 +295,8 @@ end too_long_is_refused
 
 @test("a version outside the standard's range is refused")
 bad_version_is_refused()
-    var scratch: []u8 = [0; 8192]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 8192]
+    val out: []u8 = [0; 4096]
 
     assert(is_bad_version(encode("SYSL", scratch, out, min_version = 0)))
     assert(is_bad_version(encode("SYSL", scratch, out, max_version = 41)))
@@ -308,8 +308,8 @@ end bad_version_is_refused
 
 @test("a mask outside the standard's eight patterns is refused rather than taken modulo eight")
 bad_mask_is_refused()
-    var scratch: []u8 = [0; 8192]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 8192]
+    val out: []u8 = [0; 4096]
 
     assert(is_bad_mask(encode("SYSL", scratch, out, mask = Pattern(8))))
     assert(is_bad_mask(encode("SYSL", scratch, out, mask = Pattern(-1))),
@@ -326,8 +326,8 @@ end bad_mask_is_refused
 // behaviour this package promises in `dark`'s own comment, so it is behaviour worth pinning.
 @test("outside the symbol is light, so a quiet zone needs no bounds test")
 outside_is_light()
-    var scratch: []u8 = [0; 4096]
-    var out: []u8 = [0; 4096]
+    val scratch: []u8 = [0; 4096]
+    val out: []u8 = [0; 4096]
 
     val qr = encode("SYSL", scratch, out).expect("four characters encode")
 
