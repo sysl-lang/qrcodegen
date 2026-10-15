@@ -5,6 +5,8 @@ QR Code generation for [sysl](https://github.com/sysl-lang/sysl), bound to
 Code Model 2 in a thousand lines of C: all forty versions, all four correction levels, all four
 encoding modes, and the mask selection.
 
+*An independent sysl package for qrcodegen. It is not affiliated with or endorsed by qrcodegen's authors or trademark holders.*
+
 **This package asks the machine for nothing.** There is no `requires` block — no allocator, no
 operating system, no file system. Unlike every other binding in this organisation that can say that,
 it took no doing at all: qrcodegen never allocates, because every entry point is handed the buffers
