@@ -12,7 +12,7 @@ import sysl.slices.{as_ptr, as_mut_ptr}
 //
 // ==This package asks the machine for nothing, and here that took no doing at all==
 //
-// `package.hocon` has no `requires` block. There is no `malloc`, `calloc` or `free` anywhere in
+// `sysl.hocon` has no `requires` block. There is no `malloc`, `calloc` or `free` anywhere in
 // qrcodegen's thousand lines: **every entry point is handed the buffers it will write into**, which
 // is the shape the rest of the bindings in this organisation had to work to arrive at. qoi redirects
 // an allocator to get here; this one was already here.

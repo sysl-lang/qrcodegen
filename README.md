@@ -24,7 +24,7 @@ sh/sysl/qrcodegen/
         shim.h          so that both languages read one declaration of them
         qrcodegen.c     vendored qrcodegen, unmodified — nayuki/QR-Code-generator, MIT
         qrcodegen.h
-package.hocon           who this package is, and what it needs of the machine
+sysl.hocon              who this package is, and what it needs of the machine
 ```
 
 The module is **`sh.sysl.qrcodegen`**, and the directories are that name: a dotted module name
@@ -40,16 +40,16 @@ would otherwise be answered in the same breath. A program imports `sh.sysl.qrcod
 
 ## Using it
 
-Name it in your project's `package.hocon` and `sysl build` fetches it:
+Name it in your project's `sysl.hocon` and `sysl build` fetches it:
 
 ```hocon
 dependencies {
-  qrcodegen { git = "github.com/sysl-lang/qrcodegen", version = "0.1.0" }
+  qrcodegen { git = "github.com/sysl-lang/qrcodegen", version = "0.1.1" }
 }
 ```
 
 The coordinate is an identity rather than a URL, so it carries no `https://`, and `version` is the
-tag `v0.1.0` here.
+tag `v0.1.1` here.
 
 Or point at it directly, which needs no fetching and is what this repository's own tests do:
 
